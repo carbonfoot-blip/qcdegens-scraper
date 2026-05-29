@@ -77,7 +77,11 @@ async function scrape25K(page) {
 async function getActiveEvents(page) {
   log('Fetching active events...')
   try {
-    await page.goto('https://www.pokernews.com/live-reporting/', { waitUntil: 'networkidle', timeout: 20000 })
+    await page.goto('https://www.pokernews.com/live-reporting/', {
+      waitUntil: 'domcontentloaded', // faster than networkidle
+      timeout: 30000
+    })
+    await page.waitForTimeout(2000) // let JS settle
     const events = await page.evaluate((pnBase) => {
       const seen = new Set(), result = []
       document.querySelectorAll('a[href*="/2026-wsop/event-"]').forEach(a => {
@@ -103,9 +107,9 @@ async function scrapeChipsPage(page, eventSlug, completedSlugs = new Set()) {
   if (completedSlugs.has(eventSlug)) return null
   const url = `${PN_BASE}/${eventSlug}/chips.htm`
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 })
-    try { await page.waitForSelector('table tbody tr', { timeout: 5000 }) } catch {}
-    await page.waitForTimeout(1500)
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 })
+    try { await page.waitForSelector('table tbody tr', { timeout: 8000 }) } catch {}
+    await page.waitForTimeout(2000)
 
     return await page.evaluate((url) => {
       const bodyText = document.body.innerText
@@ -254,6 +258,10 @@ let lastResult = null
 
 app.get('/scrape', async (req, res) => {
   if (scrapeInProgress) {
+    // If last result is recent (< 4 min), return it
+    if (lastResult && (Date.now() - new Date(lastResult.updatedAt).getTime()) < 240000) {
+      return res.json({ status: 'ok', data: lastResult, cached: true })
+    }
     return res.json({ status: 'busy', message: 'Scrape in progress', lastResult })
   }
   scrapeInProgress = true
