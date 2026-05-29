@@ -1,9 +1,7 @@
 services:
   - type: web
     name: qcdegens-scraper
-    env: node
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    env: docker
     plan: free
     envVars:
       - key: NODE_ENV

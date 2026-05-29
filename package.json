@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "build": "npx playwright install chromium --with-deps"
+    "build": "npx playwright install chromium"
   },
   "dependencies": {
     "express": "^4.18.2",
