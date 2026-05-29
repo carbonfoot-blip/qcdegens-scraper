@@ -75,31 +75,45 @@ async function scrape25K(page) {
 
 // ── Get active events ─────────────────────────────────────────────────────────
 async function getActiveEvents(page) {
-  log('Fetching active events...')
+  log('Building event list...')
+
+  // Known WSOP 2026 events — we add more as they appear
+  // The scraper will probe each one and skip if no data
+  const knownEvents = []
+  for (let i = 1; i <= 100; i++) {
+    knownEvents.push({ num: i })
+  }
+
+  // Try to get event slugs from the WSOP schedule page (faster than live-reporting)
+  let eventSlugs = []
   try {
-    await page.goto('https://www.pokernews.com/live-reporting/', {
-      waitUntil: 'domcontentloaded', // faster than networkidle
-      timeout: 30000
+    await page.goto('https://www.pokernews.com/tours/wsop/2026-wsop/', {
+      waitUntil: 'domcontentloaded', timeout: 15000
     })
-    await page.waitForTimeout(2000) // let JS settle
-    const events = await page.evaluate((pnBase) => {
+    eventSlugs = await page.evaluate(() => {
       const seen = new Set(), result = []
       document.querySelectorAll('a[href*="/2026-wsop/event-"]').forEach(a => {
         const href = a.getAttribute('href') || ''
-        const m    = href.match(/\/2026-wsop\/(event-[\w-]+)\//)
+        const m = href.match(/\/2026-wsop\/(event-[\w-]+)\//)
         if (m && !seen.has(m[1])) {
           seen.add(m[1])
-          result.push({ slug: m[1], name: a.textContent.trim() || m[1], url: `${pnBase}/${m[1]}/chips.htm` })
+          result.push({ slug: m[1], name: a.textContent.trim() || m[1] })
         }
       })
       return result
-    }, PN_BASE)
-    log(`  Found ${events.length} events`)
-    return events
+    })
+    log(`  Found ${eventSlugs.length} events from schedule page`)
   } catch(e) {
-    log(`  Warning: ${e.message}`)
-    return []
+    log(`  Schedule page failed: ${e.message}`)
   }
+
+  if (eventSlugs.length > 0) {
+    return eventSlugs.map(e => ({ ...e, url: `${PN_BASE}/${e.slug}/chips.htm` }))
+  }
+
+  // Fallback: return empty, chips pages will be probed by slug pattern
+  log('  Using empty event list — will rely on previous data')
+  return []
 }
 
 // ── Scrape chips page ─────────────────────────────────────────────────────────
@@ -152,7 +166,7 @@ async function scrapeChipsPage(page, eventSlug, completedSlugs = new Set()) {
 }
 
 // ── Main scrape function ──────────────────────────────────────────────────────
-async function doScrape(completedEvents = []) {
+async function doScrape(completedEvents = [], knownSlugs = []) {
   const completedSlugs = new Set(completedEvents)
   const browser = await chromium.launch({
     headless: true,
@@ -166,7 +180,18 @@ async function doScrape(completedEvents = []) {
 
   try {
     const { scoreMap, nameMap } = await scrape25K(page)
-    const events = await getActiveEvents(page)
+    let events = await getActiveEvents(page)
+
+    // Fallback: use known slugs from previous data if discovery failed
+    if (events.length === 0 && knownSlugs.length > 0) {
+      log(`  Using ${knownSlugs.length} known slugs from previous data`)
+      events = knownSlugs.map(slug => ({
+        slug,
+        name: slug,
+        url: `${PN_BASE}/${slug}/chips.htm`
+      }))
+    }
+
     const eventsToCheck = events.slice(0, 15).filter(ev => !completedSlugs.has(ev.slug))
 
     const pagesData = {}
@@ -283,7 +308,9 @@ app.get('/scrape', async (req, res) => {
   log('Starting scrape...')
 
   try {
-    const result = await doScrape(completedEvents)
+    const completedEvents = req.query.completed ? req.query.completed.split(',') : []
+    const knownSlugs = req.query.known ? req.query.known.split(',') : []
+    const result = await doScrape(completedEvents, knownSlugs)
     lastResult = result
     res.json({ status: 'ok', data: result })
     log(`Scrape complete. Team score: ${result.teamScore}`)
