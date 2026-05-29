@@ -257,17 +257,32 @@ let scrapeInProgress = false
 let lastResult = null
 
 app.get('/scrape', async (req, res) => {
-  if (scrapeInProgress) {
-    // If last result is recent (< 4 min), return it
-    if (lastResult && (Date.now() - new Date(lastResult.updatedAt).getTime()) < 240000) {
-      return res.json({ status: 'ok', data: lastResult, cached: true })
-    }
-    return res.json({ status: 'busy', message: 'Scrape in progress', lastResult })
+  const completedEvents = req.query.completed ? req.query.completed.split(',') : []
+
+  // If result is fresh (< 4 min) return it immediately
+  if (lastResult && (Date.now() - new Date(lastResult.updatedAt).getTime()) < 240000) {
+    log('Returning cached result')
+    return res.json({ status: 'ok', data: lastResult, cached: true })
   }
+
+  // If scrape already in progress, wait for it
+  if (scrapeInProgress) {
+    log('Scrape in progress, waiting...')
+    // Poll until done (max 4 min)
+    for (let i = 0; i < 48; i++) {
+      await new Promise(r => setTimeout(r, 5000))
+      if (!scrapeInProgress && lastResult) {
+        return res.json({ status: 'ok', data: lastResult })
+      }
+    }
+    return res.status(503).json({ status: 'timeout', message: 'Scrape taking too long' })
+  }
+
+  // Start scrape
   scrapeInProgress = true
-  log('Scrape requested...')
+  log('Starting scrape...')
+
   try {
-    const completedEvents = req.query.completed ? req.query.completed.split(',') : []
     const result = await doScrape(completedEvents)
     lastResult = result
     res.json({ status: 'ok', data: result })
